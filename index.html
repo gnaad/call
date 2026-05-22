@@ -1,9 +1,12 @@
 <!doctype html>
-<html>
+<html ng-app="voiceApp">
   <head>
     <meta charset="UTF-8" />
     <title>Voice Call</title>
+
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.8.2/angular.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -16,422 +19,471 @@
         margin: 5px;
       }
 
-      #status {
+      .logs {
         border: 1px solid #ccc;
         padding: 10px;
         margin-top: 10px;
         background: #f8f8f8;
+        height: 250px;
+        overflow-y: auto;
       }
     </style>
   </head>
 
-  <body>
+  <body ng-controller="VoiceController">
     <h2>Voice Call</h2>
 
     <div>
       Caller ID:
-      <b><span id="callerId">Generating Id...</span></b>
+      <b>{{callerId}}</b>
     </div>
-    <br />
 
-    <input id="receiverId" placeholder="Enter Receiver ID" />
-    <button id="callBtn" onclick="makeCall()">Call</button>
-    <button id="muteBtn" onclick="toggleMute()" style="display: none">
-      Mute
+    <input type="text" ng-model="receiverId" placeholder="Enter Receiver ID" />
+
+    <button ng-show="showCall" ng-click="makeCall()">Call</button>
+
+    <button ng-show="showMute" ng-click="toggleMute()">
+      {{muteButtonText}}
     </button>
-    <button id="hangupBtn" onclick="disconnectCall()" style="display: none">
-      Hangup
-    </button>
-    <button id="pickIncoming" onclick="pickCall()" style="display: none">
-      Pick
-    </button>
-    <button id="rejectIncoming" onclick="rejectCall()" style="display: none">
-      Reject
-    </button>
-    <div id="status"></div>
+
+    <button ng-show="showHangup" ng-click="disconnectCall()">Hangup</button>
+
+    <button ng-show="showPick" ng-click="pickCall()">Pick</button>
+
+    <button ng-show="showReject" ng-click="rejectCall()">Reject</button>
+
+    <div class="logs">
+      <div ng-repeat="msg in logs track by $index">{{msg}}</div>
+    </div>
+
     <audio id="remoteAudio" autoplay playsinline></audio>
 
     <script>
-      let peer;
-      let currentCall;
-      let localStream;
-      let dataConn;
-      let incomingCall = null;
-      let callEnding = false;
+      var app = angular.module("voiceApp", []);
 
-      function log(message) {
-        console.log(message);
-        const status = document.getElementById("status");
-        const time = new Date().toLocaleTimeString();
-        status.innerHTML += "[" + time + "] " + message + "<br>";
-        status.scrollTop = status.scrollHeight;
-      }
+      app.controller("VoiceController", function ($scope, $window) {
+        let peer;
+        let currentCall = null;
+        let localStream = null;
+        let dataConnection = null;
+        let incomingCall = null;
+        let callEnding = false;
+        let isMuted = false;
 
-      async function getMicrophone() {
-        if (localStream) {
-          return localStream;
+        $scope.callerId = "Generating Id...";
+        $scope.receiverId = "";
+        $scope.logs = [];
+
+        $scope.showCall = true;
+        $scope.showMute = false;
+        $scope.showHangup = false;
+        $scope.showPick = false;
+        $scope.showReject = false;
+
+        $scope.muteButtonText = "Mute";
+
+        function updateView() {
+          if (!$scope.$$phase) {
+            $scope.$applyAsync();
+          }
         }
-        try {
-          log("Requesting microphone permission");
-          localStream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
+
+        function log(message) {
+          const time = new Date().toLocaleTimeString();
+          if ($scope.logs.length > 200) {
+            $scope.logs.shift();
+          }
+          $scope.logs.push("[" + time + "] " + message);
+          updateView();
+        }
+
+        async function getPermission() {
+          if (localStream) {
+            return localStream;
+          }
+
+          try {
+            log("Requesting microphone permission");
+
+            localStream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+            });
+
+            log("Microphone permission granted");
+
+            localStream.getAudioTracks().forEach((track) => {
+              log("Input Device = " + track.label);
+            });
+
+            return localStream;
+          } catch (e) {
+            log("Microphone permission denied");
+            throw e;
+          }
+        }
+
+        function showCallButton() {
+          $scope.showCall = true;
+          updateView();
+        }
+
+        function hideCallButton() {
+          $scope.showCall = false;
+          updateView();
+        }
+
+        function showMuteHangupButton() {
+          $scope.showMute = true;
+          $scope.showHangup = true;
+          updateView();
+        }
+
+        function hideMuteHangupButton() {
+          $scope.showMute = false;
+          $scope.showHangup = false;
+          updateView();
+        }
+
+        function showPickRejectButton() {
+          $scope.showPick = true;
+          $scope.showReject = true;
+          updateView();
+        }
+
+        function hidePickRejectButton() {
+          $scope.showPick = false;
+          $scope.showReject = false;
+          updateView();
+        }
+
+        function resetMuteState() {
+          isMuted = false;
+          $scope.muteButtonText = "Mute";
+          updateView();
+        }
+
+        function clearRemoteAudio() {
+          const audio = document.getElementById("remoteAudio");
+          audio.pause();
+          audio.srcObject = null;
+        }
+
+        function setupCall(call) {
+          call.on("stream", function (stream) {
+            log("Receiver stream received");
+
+            const audio = document.getElementById("remoteAudio");
+            audio.srcObject = stream;
+            audio.play().catch((err) => {
+              log("Error in audio = " + err.message);
+            });
+
+            showMuteHangupButton();
           });
 
-          log("Microphone permission granted");
-          localStream.getAudioTracks().forEach((track) => {
-            log("Input Device = " + track.label);
-          });
-          return localStream;
-        } catch (e) {
-          log("Microphone permission denied");
-          console.error(e);
-          throw e;
-        }
-      }
-
-      async function init() {
-        log("Application initiated");
-
-        log("Creating connection");
-        peer = new Peer({
-          debug: 3,
-        });
-        log("Connection created");
-
-        peer.on("open", (id) => {
-          log("Peer connected");
-          log("Caller Id = " + id);
-          document.getElementById("callerId").innerText = id;
-          console.log("Connection opened", id);
-        });
-
-        peer.on("call", (call) => {
-          incomingCall = call;
-          hideCallButton();
-          log("Incoming call from = " + call.peer);
-          showPickRejectButton();
-          call.on("close", () => {
+          call.on("close", function () {
+            if (callEnding) {
+              return;
+            }
             currentCall = null;
-            log("Incoming call closed");
-            incomingCall = null;
+            log("Call closed");
+
             showCallButton();
             hideMuteHangupButton();
             hidePickRejectButton();
+
             resetMuteState();
-            const audio = document.getElementById("remoteAudio");
-            audio.pause();
-            audio.srcObject = null;
+            clearRemoteAudio();
+
+            if (localStream) {
+              localStream.getTracks().forEach((track) => {
+                track.stop();
+              });
+              localStream = null;
+            }
           });
-        });
 
-        peer.on("connection", (conn) => {
-          dataConn = conn;
-          setupDataConnection(conn);
-        });
+          call.on("error", function (err) {
+            log("Call Error");
+          });
 
-        peer.on("disconnected", () => {
-          log("Receiver disconnected");
-        });
+          if (call.peerConnection) {
+            call.peerConnection.oniceconnectionstatechange = () => {
+              log("Call Health = " + call.peerConnection.iceConnectionState);
+            };
 
-        peer.on("close", () => {
-          log("Connection closed");
-        });
+            call.peerConnection.onconnectionstatechange = () => {
+              log("Connection Status = " + call.peerConnection.connectionState);
 
-        peer.on("error", (err) => {
-          log("Connection Error: " + err.type);
-          console.error("Connection error: ", err);
-          resetMuteState();
-        });
-      }
-
-      async function pickCall() {
-        callEnding = false;
-        if (!incomingCall) {
-          return;
+              if (
+                call.peerConnection.connectionState === "failed" ||
+                call.peerConnection.connectionState === "disconnected"
+              ) {
+                log("Peer disconnected");
+                $scope.disconnectCall();
+              }
+            };
+          }
         }
-        try {
-          const stream = await getMicrophone();
+
+        function setupDataConnection(conn) {
+          if (conn._initialized) {
+            return;
+          }
+          conn._initialized = true;
+          conn.on("open", function () {
+            log("Data channel ready");
+
+            if (!currentCall && $scope.receiverId) {
+              hideCallButton();
+              log("Calling = " + $scope.receiverId);
+              currentCall = peer.call($scope.receiverId, localStream);
+              $scope.showHangup = true;
+              setupCall(currentCall);
+              updateView();
+            }
+          });
+
+          conn.on("data", function (data) {
+            if (data.type === "muteStatus") {
+              log(
+                data.muted
+                  ? "Receiver muted microphone"
+                  : "Receiver unmuted microphone",
+              );
+            }
+
+            if (data.type === "callRejected") {
+              log("Receiver rejected the call");
+              if (currentCall) {
+                currentCall.close();
+                currentCall = null;
+              }
+              hideMuteHangupButton();
+              showCallButton();
+              if (localStream) {
+                localStream.getTracks().forEach((track) => track.stop());
+                localStream = null;
+              }
+            }
+
+            if (data.type === "callCancelled") {
+              callEnding = false;
+              log("Caller cancelled the call");
+              incomingCall = null;
+
+              clearRemoteAudio();
+              hidePickRejectButton();
+              hideMuteHangupButton();
+              showCallButton();
+              resetMuteState();
+            }
+          });
+
+          conn.on("close", function () {
+            log("Connection closed");
+
+            dataConnection = null;
+
+            clearRemoteAudio();
+            showCallButton();
+            hideMuteHangupButton();
+            hidePickRejectButton();
+          });
+        }
+
+        $scope.makeCall = async function () {
+          callEnding = false;
+          if ($scope.receiverId === $scope.callerId) {
+            alert("Cannot call yourself");
+            return;
+          }
+          if (!$scope.receiverId) {
+            alert("Enter Receiver ID");
+            return;
+          }
+
+          try {
+            await getPermission();
+            dataConnection = peer.connect($scope.receiverId);
+            setupDataConnection(dataConnection);
+          } catch (e) {
+            log("Call cancelled");
+          }
+        };
+
+        $scope.pickCall = async function () {
+          callEnding = false;
+          if (!incomingCall) {
+            return;
+          }
+
+          const stream = await getPermission();
           currentCall = incomingCall;
           currentCall.answer(stream);
           setupCall(currentCall);
+
           hideCallButton();
           showMuteHangupButton();
-          log("Call picked");
-          incomingCall = null;
           hidePickRejectButton();
-        } catch (e) {
-          log("Unable to access microphone");
-          console.error(e);
-        }
-      }
 
-      function rejectCall() {
-        if (!incomingCall) {
-          return;
-        }
-        if (dataConn && dataConn.open) {
-          dataConn.send({
-            type: "callRejected",
+          incomingCall = null;
+          log("Call picked");
+        };
+
+        $scope.rejectCall = function () {
+          if (!incomingCall) {
+            return;
+          }
+
+          if (dataConnection && dataConnection.open) {
+            dataConnection.send({
+              type: "callRejected",
+            });
+          }
+
+          if (localStream) {
+            localStream.getTracks().forEach((track) => {
+              track.stop();
+            });
+            localStream = null;
+          }
+
+          incomingCall.close();
+          incomingCall = null;
+
+          hidePickRejectButton();
+          showCallButton();
+
+          log("Incoming call rejected");
+        };
+
+        $scope.toggleMute = function () {
+          if (!localStream) {
+            return;
+          }
+
+          localStream.getAudioTracks().forEach((track) => {
+            track.enabled = isMuted;
           });
-        }
-        incomingCall.close();
-        log("Incoming call rejected");
-        incomingCall = null;
-        hidePickRejectButton();
-        showCallButton();
-        resetMuteState();
-      }
 
-      let isMuted = false;
-      function toggleMute() {
-        if (!localStream) {
-          log("No audio available");
-          return;
-        }
+          isMuted = !isMuted;
+          $scope.muteButtonText = isMuted ? "Unmute" : "Mute";
 
-        localStream.getAudioTracks().forEach((track) => {
-          track.enabled = isMuted;
-        });
+          updateView();
 
-        isMuted = !isMuted;
+          if (dataConnection && dataConnection.open) {
+            dataConnection.send({
+              type: "muteStatus",
+              muted: isMuted,
+            });
+          }
+        };
 
-        const btn = document.getElementById("muteBtn");
-        btn.innerText = isMuted ? "Unmute" : "Mute";
-        log(isMuted ? "Microphone muted" : "Microphone unmuted");
-        if (dataConn && dataConn.open) {
-          dataConn.send({
-            type: "muteStatus",
-            muted: isMuted,
-          });
-        }
-      }
+        $scope.disconnectCall = function () {
+          if (callEnding) {
+            return;
+          }
 
-      function resetMuteState() {
-        isMuted = false;
-        document.getElementById("muteBtn").innerText = "Mute";
-      }
+          callEnding = true;
 
-      function setupCall(call) {
-        log("Adding call listeners");
-        console.log("Call Object", call);
+          if (dataConnection?.open) {
+            dataConnection.send({
+              type: "callCancelled",
+            });
+          }
 
-        call.on("stream", (stream) => {
-          log("Receiver stream received");
-          console.log("Remote Stream: ", stream);
-          const audio = document.getElementById("remoteAudio");
-          audio.srcObject = stream;
-          audio.play().catch((err) => {
-            console.error("Audio play failed", err);
-          });
-          const tracks = stream.getAudioTracks();
-          log("Receiver audio = " + tracks.length);
-          console.log("Remote Tracks: ", tracks);
-          showMuteHangupButton();
-        });
+          if (currentCall) {
+            currentCall.close();
+            currentCall = null;
+          }
 
-        call.on("close", () => {
-          currentCall = null;
-          log("Call closed");
+          if (dataConnection) {
+            dataConnection.close();
+            dataConnection = null;
+          }
+
+          if (localStream) {
+            localStream.getTracks().forEach((track) => {
+              track.stop();
+            });
+            localStream = null;
+          }
+
           showCallButton();
           hideMuteHangupButton();
           hidePickRejectButton();
-          resetMuteState();
-          document.getElementById("remoteAudio").srcObject = null;
-          if (localStream) {
-            localStream.getTracks().forEach((track) => track.stop());
-            localStream = null;
-            log("Microphone stopped");
-          }
-        });
+          clearRemoteAudio();
 
-        call.on("error", (err) => {
-          log("Call Error");
-          console.error("Call Error", err);
-          resetMuteState();
-        });
+          log("Call Disconnected");
+        };
 
-        if (call.peerConnection) {
-          call.peerConnection.oniceconnectionstatechange = () => {
-            log("Call Health = " + call.peerConnection.iceConnectionState);
-            console.log("ICE STATE", call.peerConnection.iceConnectionState);
-          };
+        function init() {
+          log("Application started");
+          peer = new Peer({
+            config: {
+              iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+              sdpSemantics: "unified-plan",
+            },
+          });
 
-          call.peerConnection.onconnectionstatechange = () => {
-            log("Connection Status = " + call.peerConnection.connectionState);
-            console.log(
-              "CONNECTION STATE",
-              call.peerConnection.connectionState,
-            );
-            if (
-              call.peerConnection.connectionState === "failed" ||
-              call.peerConnection.connectionState === "disconnected"
-            ) {
-              log("Peer disconnected");
-              disconnectCall();
+          log("Creating connection");
+          peer.on("open", function (id) {
+            $scope.callerId = id;
+
+            log("Peer connected");
+            log("Caller Id = " + id);
+            updateView();
+          });
+          log("Connection created");
+
+          peer.on("connection", function (connection) {
+            dataConnection = connection;
+            setupDataConnection(connection);
+          });
+
+          peer.on("call", function (call) {
+            if (incomingCall || currentCall) {
+              call.close();
+              return;
             }
-          };
-        }
-      }
+            incomingCall = call;
 
-      async function makeCall() {
-        callEnding = false;
-        const receiverId = document.getElementById("receiverId").value.trim();
+            hideCallButton();
+            showPickRejectButton();
 
-        if (!receiverId) {
-          alert("Enter Receiver ID");
-          return;
-        }
+            call.on("close", function () {
+              callEnding = false;
+              if (incomingCall === call) {
+                incomingCall = null;
+                hidePickRejectButton();
+                showCallButton();
+                log("Caller disconnected");
+              }
+            });
 
-        try {
-          await getMicrophone();
-          dataConn = peer.connect(receiverId);
-          setupDataConnection(dataConn);
-        } catch (e) {
-          log("Call cancelled");
-        }
-      }
+            log("Incoming call from = " + call.peer);
+          });
 
-      function disconnectCall() {
-        if (callEnding) return;
-        callEnding = true;
-        incomingCall = null;
-        resetMuteState();
-        showCallButton();
-        hideMuteHangupButton();
-        if (dataConn?.open) {
-          dataConn.send({
-            type: "callCancelled",
+          peer.on("error", function (err) {
+            log("Connection Error = " + err.type);
+            $scope.disconnectCall();
           });
         }
-        if (currentCall) {
-          currentCall.close();
-          currentCall = null;
-        }
 
-        if (dataConn) {
-          dataConn.close();
-          dataConn = null;
-        }
+        $window.addEventListener("beforeunload", function () {
+          if (peer) {
+            peer.destroy();
+          }
+        });
 
-        if (localStream) {
-          localStream.getTracks().forEach((track) => track.stop());
-          localStream = null;
-          log("Microphone stopped");
-        }
-        hidePickRejectButton();
-        const audio = document.getElementById("remoteAudio");
-        audio.pause();
-        audio.srcObject = null;
-        log("Call Disconnected");
-      }
-
-      window.addEventListener("beforeunload", () => {
-        disconnectCall();
-
-        if (peer) {
-          peer.destroy();
-        }
+        $scope.$on("$destroy", function () {
+          if (peer) {
+            peer.destroy();
+          }
+        });
+        init();
       });
-
-      function setupDataConnection(conn) {
-        if (conn._initialized) return;
-        conn._initialized = true;
-        conn.on("open", () => {
-          log("Data channel ready");
-          const receiverId = document.getElementById("receiverId").value.trim();
-          if (!currentCall && receiverId) {
-            hideCallButton();
-            log("Calling = " + receiverId);
-
-            currentCall = peer.call(receiverId, localStream);
-
-            showRingingControls();
-            setupCall(currentCall);
-          }
-        });
-
-        conn.on("data", (data) => {
-          console.log("Received:", data);
-
-          if (data.type === "muteStatus") {
-            log(
-              data.muted
-                ? "Receiver muted microphone"
-                : "Receiver unmuted microphone",
-            );
-          }
-
-          if (data.type === "callRejected") {
-            log("Receiver rejected the call");
-
-            if (currentCall) {
-              currentCall.close();
-              currentCall = null;
-            }
-
-            hideMuteHangupButton();
-            showCallButton();
-          }
-
-          if (data.type === "callCancelled") {
-            log("Caller cancelled the call");
-
-            incomingCall = null;
-            hidePickRejectButton();
-            hideMuteHangupButton();
-            showCallButton();
-
-            resetMuteState();
-
-            const audio = document.getElementById("remoteAudio");
-            audio.pause();
-            audio.srcObject = null;
-
-            if (localStream) {
-              localStream.getTracks().forEach((track) => track.stop());
-              localStream = null;
-            }
-          }
-        });
-
-        conn.on("close", () => {
-          log("Data connection closed");
-        });
-      }
-
-      function showPickRejectButton() {
-        document.getElementById("pickIncoming").style.display = "inline-block";
-        document.getElementById("rejectIncoming").style.display =
-          "inline-block";
-      }
-
-      function hidePickRejectButton() {
-        document.getElementById("pickIncoming").style.display = "none";
-        document.getElementById("rejectIncoming").style.display = "none";
-      }
-
-      function showCallButton() {
-        document.getElementById("callBtn").style.display = "inline-block";
-      }
-
-      function hideCallButton() {
-        document.getElementById("callBtn").style.display = "none";
-      }
-
-      function showMuteHangupButton() {
-        document.getElementById("muteBtn").style.display = "inline-block";
-        document.getElementById("hangupBtn").style.display = "inline-block";
-      }
-
-      function hideMuteHangupButton() {
-        document.getElementById("muteBtn").style.display = "none";
-        document.getElementById("hangupBtn").style.display = "none";
-      }
-
-      function showRingingControls() {
-        document.getElementById("hangupBtn").style.display = "inline-block";
-      }
-      window.onload = init;
     </script>
   </body>
 </html>
