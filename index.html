@@ -1,0 +1,187 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Voice Call</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+
+      input,
+      button {
+        padding: 8px;
+        margin: 5px;
+      }
+
+      #status {
+        border: 1px solid #ccc;
+        height: 350px;
+        overflow-y: auto;
+        padding: 10px;
+        margin-top: 10px;
+        background: #f8f8f8;
+      }
+
+      #myId {
+        font-weight: bold;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h2>Voice Call</h2>
+
+    <div>
+      My ID:
+      <span id="myId">Connecting...</span>
+    </div>
+    <br />
+
+    <input id="targetId" placeholder="Enter Peer ID" />
+    <button onclick="makeCall()">Call</button>
+    <button onclick="disconnectCall()">Hangup</button>
+    <div id="status"></div>
+
+    <audio id="remoteAudio" autoplay></audio>
+
+    <script>
+      let peer;
+      let currentCall;
+      let localStream;
+
+      function log(message) {
+        console.log(message);
+        const status = document.getElementById("status");
+        const time = new Date().toLocaleTimeString();
+        status.innerHTML += "[" + time + "] " + message + "<br>";
+        status.scrollTop = status.scrollHeight;
+      }
+
+      async function start() {
+        log("Application started");
+        try {
+          log("Requesting microphone permission");
+          localStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+          log("Microphone permission granted");
+          console.log("LOCAL STREAM", localStream);
+          localStream.getAudioTracks().forEach((track) => {
+            log("Audio Track: " + track.label);
+            console.log("TRACK", track);
+          });
+        } catch (e) {
+          log("Microphone permission failed");
+          console.error(e);
+          return;
+        }
+
+        log("Creating PeerJS connection");
+        peer = new Peer({
+          debug: 3,
+        });
+        log("PeerJS connection created");
+
+        peer.on("open", (id) => {
+          log("Peer connected");
+          log("My Peer ID = " + id);
+          document.getElementById("myId").innerText = id;
+          console.log("PEER OPEN", id);
+        });
+
+        peer.on("call", (call) => {
+          log("Incoming call from " + call.peer);
+          console.log("INCOMING CALL", call);
+          currentCall = call;
+          log("Answering call");
+          call.answer(localStream);
+          setupCall(call);
+        });
+
+        peer.on("connection", (conn) => {
+          log("Data connection established");
+          console.log("DATA CONNECTION", conn);
+        });
+
+        peer.on("disconnected", () => {
+          log("Peer disconnected");
+        });
+
+        peer.on("close", () => {
+          log("Peer closed");
+        });
+
+        peer.on("error", (err) => {
+          log("Peer Error : " + err.type);
+          console.error("PEER ERROR", err);
+        });
+      }
+
+      function setupCall(call) {
+        log("Setting call listeners");
+        console.log("CALL OBJECT", call);
+        call.on("stream", (stream) => {
+          log("Remote stream received");
+          console.log("REMOTE STREAM", stream);
+          document.getElementById("remoteAudio").srcObject = stream;
+          const tracks = stream.getAudioTracks();
+          log("Remote audio tracks = " + tracks.length);
+          console.log("REMOTE TRACKS", tracks);
+        });
+
+        call.on("close", () => {
+          log("Call closed");
+          console.log("CALL CLOSED");
+        });
+
+        call.on("error", (err) => {
+          log("Call Error");
+          console.error("CALL ERROR", err);
+        });
+
+        if (call.peerConnection) {
+          call.peerConnection.oniceconnectionstatechange = () => {
+            log("ICE State = " + call.peerConnection.iceConnectionState);
+            console.log("ICE STATE", call.peerConnection.iceConnectionState);
+          };
+
+          call.peerConnection.onconnectionstatechange = () => {
+            log("Connection State = " + call.peerConnection.connectionState);
+            console.log(
+              "CONNECTION STATE",
+              call.peerConnection.connectionState,
+            );
+          };
+        }
+      }
+
+      function makeCall() {
+        const targetId = document.getElementById("targetId").value.trim();
+
+        if (!targetId) {
+          alert("Enter Peer ID");
+          return;
+        }
+
+        log("Calling " + targetId);
+        console.log("CALL TARGET", targetId);
+        console.log("LOCAL STREAM", localStream);
+        currentCall = peer.call(targetId, localStream);
+        setupCall(currentCall);
+      }
+
+      function disconnectCall() {
+        if (currentCall) {
+          currentCall.close();
+          log("Disconnected");
+        }
+      }
+
+      window.onload = start;
+    </script>
+  </body>
+</html>
