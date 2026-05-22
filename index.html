@@ -140,6 +140,7 @@
         peer.on("error", (err) => {
           log("Connection Error: " + err.type);
           console.error("Connection error: ", err);
+          resetMuteState();
         });
       }
 
@@ -246,6 +247,7 @@
         call.on("error", (err) => {
           log("Call Error");
           console.error("Call Error", err);
+          resetMuteState();
         });
 
         if (call.peerConnection) {
