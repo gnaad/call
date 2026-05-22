@@ -588,6 +588,19 @@
           });
         }
 
+        $scope.copyCallerId = function () {
+          if (!$scope.callerId) return;
+
+          navigator.clipboard
+            .writeText($scope.callerId)
+            .then(() => {
+              alert("Caller ID copied to clipboard!");
+            })
+            .catch(() => {
+              alert("Failed to copy Caller ID!");
+            });
+        };
+
         $window.addEventListener("beforeunload", function () {
           if (peer) {
             peer.destroy();
