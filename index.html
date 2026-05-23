@@ -13,6 +13,13 @@
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
     />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,
+      <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23198754'>
+      <path d='M1.885.511a1.745 1.745 0 0 1 2.61.163L6.29 2.98c.329.423.445.97.312 1.494l-.547 2.19a.678.678 0 0 0 .178.643l2.457 2.457a.678.678 0 0 0 .643.178l2.19-.547a1.745 1.745 0 0 1 1.494.312l2.306 1.795c.829.645.905 1.87.163 2.611l-1.034 1.034c-.74.74-1.846 1.065-2.877.702a18.634 18.634 0 0 1-7.01-4.42A18.634 18.634 0 0 1 .52 4.804C.157 3.773.482 2.667 1.223 1.927L2.257.893z'/>
+      </svg>"
+    />
 
     <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.8.2/angular.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -68,15 +75,29 @@
 
   <body ng-controller="VoiceController">
     <div class="container py-3">
-      <div class="card voice-card">
+      <div class="card voice-card mb-3">
         <div class="card-body">
-          <h3 class="text-center mb-4">
+          <h3 class="text-center mb-2">
             <i class="bi bi-telephone-fill text-success"></i>
             Voice Call
           </h3>
-          <p class="text-center fs-6 text-danger">
-            This application is using PeerServer
+
+          <p class="text-center text-muted mb-3">
+            WebRTC-based peer-to-peer voice calling system
           </p>
+
+          <div class="alert alert-warning text-start small">
+            <strong>⚠️ Disclaimer</strong><br />
+            This is an experimental implementation of a real-time voice calling
+            system built using <b>WebRTC</b> with a peer-to-peer (P2P)
+            architecture. It uses a <b>PeerServer</b> for signaling and
+            connection setup. <br /><br />
+            🔒 Do not share sensitive or personal information during calls.
+            <br /><br />
+            ⚠️ Use this application at your own risk. The developer is not
+            responsible for any misuse, data loss or inappropriate usage of this
+            tool.
+          </div>
 
           <div class="mb-3">
             <label class="form-label fw-bold">Caller ID</label>
@@ -85,13 +106,6 @@
               class="peer-id-box d-flex justify-content-between align-items-center"
             >
               <span>{{callerId}}</span>
-
-              <button
-                class="btn btn-sm btn-outline-primary"
-                ng-click="copyCallerId()"
-              >
-                <i class="bi bi-clipboard"></i>
-              </button>
             </div>
           </div>
 
@@ -100,9 +114,9 @@
 
             <input
               type="text"
-              class="form-control"
+              class="form-control text-uppercase"
               ng-model="receiverId"
-              placeholder="Enter Receiver Peer ID"
+              placeholder="Enter Receiver ID"
             />
           </div>
 
@@ -285,6 +299,22 @@
           audio.srcObject = null;
         }
 
+        function stopMicrophone() {
+          if (localStream) {
+            localStream.getTracks().forEach((track) => {
+              track.stop();
+            });
+            localStream = null;
+            log("Microphone released");
+          }
+
+          const audio = document.getElementById("remoteAudio");
+          if (audio) {
+            audio.pause();
+            audio.srcObject = null;
+          }
+        }
+
         function setupCall(call) {
           call.on("stream", function (stream) {
             log("Receiver stream received");
@@ -302,6 +332,7 @@
             if (callEnding) {
               return;
             }
+            stopMicrophone();
             currentCall = null;
             log("Call closed");
 
@@ -313,10 +344,7 @@
             clearRemoteAudio();
 
             if (localStream) {
-              localStream.getTracks().forEach((track) => {
-                track.stop();
-              });
-              localStream = null;
+              stopMicrophone();
             }
           });
 
@@ -379,8 +407,7 @@
               hideMuteHangupButton();
               showCallButton();
               if (localStream) {
-                localStream.getTracks().forEach((track) => track.stop());
-                localStream = null;
+                stopMicrophone();
               }
             }
 
@@ -460,10 +487,7 @@
           }
 
           if (localStream) {
-            localStream.getTracks().forEach((track) => {
-              track.stop();
-            });
-            localStream = null;
+            stopMicrophone();
           }
 
           incomingCall.close();
@@ -486,9 +510,8 @@
 
           isMuted = !isMuted;
           $scope.muteButtonText = isMuted ? "Unmute" : "Mute";
-
+          log(isMuted ? "Microphone muted" : "Microphone unmuted");
           updateView();
-
           if (dataConnection && dataConnection.open) {
             dataConnection.send({
               type: "muteStatus",
@@ -498,19 +521,13 @@
         };
 
         $scope.disconnectCall = function () {
-          if (callEnding) {
-            return;
-          }
-
+          if (callEnding) return;
           callEnding = true;
 
-          if (dataConnection?.open) {
-            dataConnection.send({
-              type: "callCancelled",
-            });
-          }
-
           if (currentCall) {
+            if (currentCall.peerConnection) {
+              currentCall.peerConnection.close();
+            }
             currentCall.close();
             currentCall = null;
           }
@@ -520,11 +537,10 @@
             dataConnection = null;
           }
 
-          if (localStream) {
-            localStream.getTracks().forEach((track) => {
-              track.stop();
-            });
-            localStream = null;
+          stopMicrophone();
+
+          if (dataConnection?.open) {
+            dataConnection.send({ type: "callCancelled" });
           }
 
           showCallButton();
@@ -537,7 +553,7 @@
 
         function init() {
           log("Application started");
-          peer = new Peer({
+          peer = new Peer(generateCode(), {
             config: {
               iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
               sdpSemantics: "unified-plan",
@@ -588,18 +604,23 @@
           });
         }
 
-        $scope.copyCallerId = function () {
-          if (!$scope.callerId) return;
+        function generateCode() {
+          const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
-          navigator.clipboard
-            .writeText($scope.callerId)
-            .then(() => {
-              alert("Caller ID copied to clipboard!");
-            })
-            .catch(() => {
-              alert("Failed to copy Caller ID!");
-            });
-        };
+          function getRandomChar() {
+            return chars[Math.floor(Math.random() * chars.length)];
+          }
+
+          let firstPart = "";
+          let secondPart = "";
+
+          for (let i = 0; i < 3; i++) {
+            firstPart += getRandomChar();
+            secondPart += getRandomChar();
+          }
+
+          return `${firstPart}-${secondPart}`;
+        }
 
         $window.addEventListener("beforeunload", function () {
           if (peer) {
