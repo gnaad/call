@@ -553,7 +553,8 @@
 
         function init() {
           log("Application started");
-          peer = new Peer({
+          peer = new Peer(generateCode(),{
+            debug: 3,
             config: {
               iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
               sdpSemantics: "unified-plan",
